@@ -16,13 +16,13 @@ const SHEET_NAME = 'HariBesar';
 const GROUP_ID = '120363405437459768@g.us';
 const TZ = 'Asia/Jakarta';
 
-// === WEB SERVER UNTUK KEEP-ALIVE (Replit/Render) ===
+// === WEB SERVER UNTUK KEEP-ALIVE ===
 const app = express();
 app.get('/', (req, res) => res.send('Bot WhatsApp is Alive! 🤖'));
 app.get('/health', (req, res) => res.sendStatus(200));
 
 const server = http.createServer(app);
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8000; // Default Standard Port
 server.listen(PORT, () => console.log(`🌐 Server listening on port ${PORT}`))
   .on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
@@ -37,10 +37,14 @@ const client = new Client({
   authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
   puppeteer: {
     headless: true,
+    // Gunakan executablePath dari environment atau default
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
     args: [
-      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote',
-      '--single-process', '--disable-gpu'
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-ipv6' // Safe default
     ]
   }
 });
@@ -52,6 +56,7 @@ client.on('qr', qr => {
 
 client.on('ready', () => {
   console.log('✅ Bot WhatsApp berhasil terhubung!');
+
   // Jadwal kirim otomatis setiap jam 05:00 WIB
   schedule.scheduleJob('0 5 * * *', async () => {
     console.log('⏰ Executing scheduled check (05:00 WIB)...');
@@ -82,23 +87,14 @@ async function ambilDataSheet() {
   }
 }
 
-/**
- * Mengubah data mentah menjadi object dengan tanggal absolut (Moment object).
- * Menghitung occurrence terdekat (tahun ini atau tahun depan).
- */
 function processHolidays(data) {
   const now = moment().tz(TZ).startOf('day');
 
   return data.map(item => {
-    // Parse tanggal "1 Januari", "17 Agustus" dsb.
-    // Asumsi format di sheet sudah benar ejaan bulannya ("Januari", "Februari", dll)
     const dateString = `${item.rawTanggal} ${item.rawBulan}`;
     let date = moment.tz(dateString, 'D MMMM', TZ).startOf('day');
-
-    // Validasi jika parsing gagal
     if (!date.isValid()) return null;
 
-    // Atur tahun. Jika tanggal tahun ini sudah lewat, set ke tahun depan
     date.year(now.year());
     if (date.isBefore(now)) {
       date.add(1, 'year');
@@ -107,18 +103,14 @@ function processHolidays(data) {
     return {
       ...item,
       date: date,
-      diff: date.diff(now, 'days') // Selisih hari (0 = hari ini)
+      diff: date.diff(now, 'days')
     };
-  }).filter(i => i !== null).sort((a, b) => a.date.valueOf() - b.date.valueOf()); // Urutkan terdekat
+  }).filter(i => i !== null).sort((a, b) => a.date.valueOf() - b.date.valueOf());
 }
-
-// === FUNGSI UTAMA ===
 
 async function kirimPesanTerjadwal() {
   const rawData = await ambilDataSheet();
   const holidays = processHolidays(rawData);
-
-  // Filter: Hari ini ATAU dalam 5 hari ke depan
   const upcoming = holidays.filter(h => h.diff >= 0 && h.diff <= 5);
 
   if (upcoming.length > 0) {
@@ -132,30 +124,24 @@ async function kirimPesanTerjadwal() {
 
     try {
       await client.sendMessage(GROUP_ID, pesan.trim());
-      console.log(`✅ Pesan terkirim: ${upcoming.length} hari besar dalam 5 hari kedepan.`);
+      console.log(`✅ Pesan terkirim.`);
     } catch (err) {
       console.error('❌ Gagal kirim pesan:', err);
     }
   } else {
-    console.log('ℹ️ Tidak ada hari besar dalam 5 hari ke depan. Skip pesan.');
+    console.log('ℹ️ Tidak ada hari besar dalam 5 hari ke depan.');
   }
 }
 
 client.on('message', async msg => {
   const body = msg.body.toLowerCase();
 
-  // Match /cek atau /cek <angka>
-  // Regex: ^\/cek(?:\s+(\d+))?$
-  // contoh: /cek -> n=1 (default), /cek 5 -> n=5
-
   if (body.startsWith('/cek') || body.startsWith('!cek')) {
     const match = body.match(/[!/]cek\s*(\d+)?/);
-    let n = 1; // Default
+    let n = 1;
     if (match && match[1]) {
       n = parseInt(match[1]);
     }
-
-    // Batasi maximal agar tidak spam (misal max 50)
     if (n > 50) n = 50;
     if (n < 1) n = 1;
 
@@ -163,8 +149,6 @@ client.on('message', async msg => {
 
     const rawData = await ambilDataSheet();
     const holidays = processHolidays(rawData);
-
-    // Ambil N hari besar terdekat (sudah disort di processHolidays)
     const selected = holidays.slice(0, n);
 
     if (selected.length > 0) {
